@@ -1,0 +1,18 @@
+## Rust
+/server/target/
+
+## Task data
+/kanban_data/
+/server/kanban_data/
+.kanban-browser-opened
+
+## Logs
+*.log
+
+## OS
+.DS_Store
+
+## Tooling
+.specify/
+.codex/
+specs/

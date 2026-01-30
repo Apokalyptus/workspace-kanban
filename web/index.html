@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kanban Task Files</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1 id="headline">Kanban Task Files</h1>
+        <p>Tasks are stored as plain .md files in fixed folders.</p>
+      </div>
+    </header>
+
+    <div class="task-editor-toggle">
+      <button type="button" id="toggle-task-editor">Hide task editor</button>
+    </div>
+
+    <section class="composer" id="task-editor">
+      <h2>Create Task</h2>
+      <form id="task-form">
+        <div class="field-row">
+          <label>
+            Title
+            <input type="text" name="title" placeholder="Short title" required />
+          </label>
+          <label>
+            Creator
+            <input type="text" name="creator" placeholder="Your name" />
+          </label>
+          <label>
+            Assigned To
+            <input type="text" name="assigned_to" placeholder="Owner" />
+          </label>
+          <label>
+            Tags
+            <input type="text" name="tags" placeholder="tag1, tag2" />
+          </label>
+        </div>
+        <label>
+          Description
+          <textarea name="description" rows="3" placeholder="What needs to be done?"></textarea>
+        </label>
+        <div class="actions">
+          <button type="submit">Add to backlog</button>
+          <span class="hint">Drag cards between columns to update folder + status.</span>
+        </div>
+      </form>
+    </section>
+
+    <div class="board-editor-toggle">
+      <button type="button" id="toggle-editor">Hide editor</button>
+    </div>
+
+    <section class="board-editor" id="board-editor">
+      <header>
+        <div>
+          <h2>Board Editor</h2>
+          <p>Define columns in <code>.workspace-kanban</code>. IDs become folder names.</p>
+        </div>
+      </header>
+      <form id="board-form">
+        <div id="board-rows"></div>
+        <div class="editor-actions">
+          <button type="button" id="add-column">Add column</button>
+          <button type="submit">Save board</button>
+        </div>
+        <p class="editor-hint">Removing a column with tasks will ask for action in the server terminal.</p>
+      </form>
+    </section>
+
+    <main class="board" id="board"></main>
+
+    <template id="task-card-template">
+      <article class="card" draggable="true">
+        <div class="card-header">
+          <h4 class="card-title"></h4>
+          <div class="card-actions">
+            <button data-action="edit">Edit</button>
+            <button data-action="delete">Delete</button>
+          </div>
+        </div>
+        <p class="card-description"></p>
+        <div class="card-meta">
+          <span data-meta="creator"></span>
+          <span data-meta="assigned_to"></span>
+        </div>
+        <div class="card-tags"></div>
+        <div class="card-footer">
+          <span data-meta="updated_at"></span>
+          <span data-meta="id"></span>
+        </div>
+      </article>
+    </template>
+
+    <template id="board-row-template">
+      <div class="board-row">
+        <label>
+          Column ID
+          <input type="text" name="id" placeholder="in_progress" required />
+        </label>
+        <label>
+          Title
+          <input type="text" name="title" placeholder="In Progress" required />
+        </label>
+        <label>
+          WIP Limit
+          <input type="number" name="wip_limit" min="0" placeholder="0" />
+        </label>
+        <button type="button" data-action="remove">Remove</button>
+      </div>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
