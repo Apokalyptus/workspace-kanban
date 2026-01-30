@@ -92,6 +92,22 @@ Run the binary directly:
 
 The frontend assets (`index.html`, `app.js`, `styles.css`) are embedded into the binary at build time, so you can run just the compiled server without shipping the `web/` folder.
 
+## Docker & Compose
+
+This repo includes a `Dockerfile`, `docker-compose.yml`, and `.env.example` for running the app as a container. The compose file is preconfigured for a private registry and an SMB (CIFS) mount.
+
+Quick start:
+```bash
+cp .env.example .env
+docker compose pull
+docker compose up -d
+```
+
+Notes:
+- The image is pulled from `REGISTRY/IMAGE_NAME:IMAGE_TAG`.
+- SMB credentials are read from `.env` and mounted to `/data` inside the container.
+- The compose `command` sets explicit CLI flags (editor visibility + browser open behavior).
+
 ## Board Configuration (`.workspace-kanban`)
 
 The board structure is defined by a file named `.workspace-kanban` inside the target directory.
