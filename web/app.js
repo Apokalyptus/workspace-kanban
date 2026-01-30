@@ -17,6 +17,7 @@ const boardEditor = document.getElementById("board-editor");
 const taskEditor = document.getElementById("task-editor");
 const toggleTaskEditorButton = document.getElementById("toggle-task-editor");
 const headline = document.getElementById("headline");
+const toast = document.getElementById("toast");
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -69,6 +70,16 @@ function renderTask(task) {
     form.description.value = task.description || "";
     editingTaskId = task.id;
     submitButton.textContent = "Update task";
+    if (taskEditor.classList.contains("collapsed")) {
+      setEditorVisibility(
+        taskEditor,
+        true,
+        toggleTaskEditorButton,
+        { show: "Show task editor", hide: "Hide task editor" },
+        true
+      );
+      writeUiPreference("kanban.showTaskEditor", true);
+    }
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
@@ -108,6 +119,12 @@ function renderBoardEditor(columns) {
     row.querySelector("input[name='id']").value = column.id;
     row.querySelector("input[name='title']").value = column.title;
     row.querySelector("input[name='wip_limit']").value = column.wip_limit || 0;
+    row.querySelector("[data-action='move-up']").addEventListener("click", () => {
+      moveRow(row, "up");
+    });
+    row.querySelector("[data-action='move-down']").addEventListener("click", () => {
+      moveRow(row, "down");
+    });
     row.querySelector("[data-action='remove']").addEventListener("click", () => {
       row.remove();
     });
@@ -115,14 +132,53 @@ function renderBoardEditor(columns) {
   });
 }
 
-function setEditorVisibility(target, isVisible, button, labels) {
+function animateSection(target, isVisible) {
   if (isVisible) {
-    target.classList.remove("hidden");
-    button.textContent = labels.hide;
+    target.classList.remove("collapsed");
+    const fullHeight = target.scrollHeight;
+    target.style.height = "0px";
+    target.style.opacity = "0";
+    target.style.transform = "translateY(-6px)";
+    const animation = target.animate(
+      [
+        { height: "0px", opacity: 0, transform: "translateY(-6px)" },
+        { height: `${fullHeight}px`, opacity: 1, transform: "translateY(0)" },
+      ],
+      { duration: 260, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" }
+    );
+    animation.onfinish = () => {
+      target.style.height = "";
+      target.style.opacity = "";
+      target.style.transform = "";
+    };
   } else {
-    target.classList.add("hidden");
-    button.textContent = labels.show;
+    const fullHeight = target.offsetHeight;
+    target.style.height = `${fullHeight}px`;
+    const animation = target.animate(
+      [
+        { height: `${fullHeight}px`, opacity: 1, transform: "translateY(0)" },
+        { height: "0px", opacity: 0, transform: "translateY(-6px)" },
+      ],
+      { duration: 260, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" }
+    );
+    animation.onfinish = () => {
+      target.classList.add("collapsed");
+      target.style.height = "";
+      target.style.opacity = "";
+      target.style.transform = "";
+    };
   }
+}
+
+function setEditorVisibility(target, isVisible, button, labels, animate = false) {
+  if (animate) {
+    animateSection(target, isVisible);
+  } else if (isVisible) {
+    target.classList.remove("collapsed");
+  } else {
+    target.classList.add("collapsed");
+  }
+  button.textContent = isVisible ? labels.hide : labels.show;
 }
 
 function readUiPreference(key) {
@@ -140,14 +196,14 @@ async function loadUiDefaults() {
     const taskPref = readUiPreference("kanban.showTaskEditor");
     const boardPref = readUiPreference("kanban.showBoardEditor");
     if (taskPref !== null && boardPref !== null) {
-      setEditorVisibility(taskEditor, taskPref, toggleTaskEditorButton, {
-        show: "Show task editor",
-        hide: "Hide task editor",
-      });
-      setEditorVisibility(boardEditor, boardPref, toggleEditorButton, {
-        show: "Show editor",
-        hide: "Hide editor",
-      });
+    setEditorVisibility(taskEditor, taskPref, toggleTaskEditorButton, {
+      show: "Show task editor",
+      hide: "Hide task editor",
+    });
+    setEditorVisibility(boardEditor, boardPref, toggleEditorButton, {
+      show: "Show board editor",
+      hide: "Hide board editor",
+    });
       return;
     }
     const data = await api("/api/ui");
@@ -156,8 +212,8 @@ async function loadUiDefaults() {
       hide: "Hide task editor",
     });
     setEditorVisibility(boardEditor, data.show_board_editor, toggleEditorButton, {
-      show: "Show editor",
-      hide: "Hide editor",
+      show: "Show board editor",
+      hide: "Hide board editor",
     });
     writeUiPreference("kanban.showTaskEditor", data.show_task_editor);
     writeUiPreference("kanban.showBoardEditor", data.show_board_editor);
@@ -256,6 +312,37 @@ async function loadTasks() {
   animateCards(previousRects);
 }
 
+let updateVersion = 0;
+let toastTimer = null;
+
+function showToast(message) {
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 2000);
+}
+
+async function listenForUpdates() {
+  try {
+    const data = await api(`/api/updates?since=${updateVersion}`);
+    if (data && typeof data.version === "number") {
+      if (data.changed) {
+        await loadTasks();
+        const time = new Date().toLocaleTimeString();
+        showToast(`Board updated · ${time}`);
+      }
+      updateVersion = data.version;
+    }
+  } catch (err) {
+    console.warn("Update channel failed", err);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  listenForUpdates();
+}
+
 function setupDropzones() {
   document.querySelectorAll(".column-body").forEach((zone) => {
     zone.addEventListener("dragover", (event) => {
@@ -317,6 +404,7 @@ loadTasks().catch((err) => {
 
 loadUiDefaults();
 loadThemeSettings();
+listenForUpdates();
 
 setInterval(() => {
   loadTasks().catch((err) => console.warn("Auto-refresh failed", err));
@@ -324,11 +412,52 @@ setInterval(() => {
 
 addColumnButton.addEventListener("click", () => {
   const row = boardRowTemplate.content.firstElementChild.cloneNode(true);
+  row.querySelector("[data-action='move-up']").addEventListener("click", () => {
+    moveRow(row, "up");
+  });
+  row.querySelector("[data-action='move-down']").addEventListener("click", () => {
+    moveRow(row, "down");
+  });
   row.querySelector("[data-action='remove']").addEventListener("click", () => {
     row.remove();
   });
   boardRows.appendChild(row);
 });
+
+function moveRow(row, direction) {
+  const siblings = Array.from(boardRows.children);
+  const beforeRects = new Map();
+  siblings.forEach((el) => beforeRects.set(el, el.getBoundingClientRect()));
+
+  if (direction === "up") {
+    const prev = row.previousElementSibling;
+    if (!prev) return;
+    boardRows.insertBefore(row, prev);
+  } else {
+    const next = row.nextElementSibling;
+    if (!next) return;
+    boardRows.insertBefore(next, row);
+  }
+
+  const afterRects = new Map();
+  siblings.forEach((el) => afterRects.set(el, el.getBoundingClientRect()));
+  siblings.forEach((el) => {
+    const before = beforeRects.get(el);
+    const after = afterRects.get(el);
+    if (!before || !after) return;
+    const dx = before.left - after.left;
+    const dy = before.top - after.top;
+    if (dx !== 0 || dy !== 0) {
+      el.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px)` },
+          { transform: "translate(0, 0)" },
+        ],
+        { duration: 180, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" }
+      );
+    }
+  });
+}
 
 boardForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -360,15 +489,19 @@ boardForm.addEventListener("submit", async (event) => {
 });
 
 toggleEditorButton.addEventListener("click", () => {
-  const isHidden = boardEditor.classList.toggle("hidden");
-  const isVisible = !isHidden;
-  toggleEditorButton.textContent = isHidden ? "Show editor" : "Hide editor";
+  const isVisible = boardEditor.classList.contains("collapsed");
+  setEditorVisibility(boardEditor, isVisible, toggleEditorButton, {
+    show: "Show board editor",
+    hide: "Hide board editor",
+  }, true);
   writeUiPreference("kanban.showBoardEditor", isVisible);
 });
 
 toggleTaskEditorButton.addEventListener("click", () => {
-  const isHidden = taskEditor.classList.toggle("hidden");
-  const isVisible = !isHidden;
-  toggleTaskEditorButton.textContent = isHidden ? "Show task editor" : "Hide task editor";
+  const isVisible = taskEditor.classList.contains("collapsed");
+  setEditorVisibility(taskEditor, isVisible, toggleTaskEditorButton, {
+    show: "Show task editor",
+    hide: "Hide task editor",
+  }, true);
   writeUiPreference("kanban.showTaskEditor", isVisible);
 });

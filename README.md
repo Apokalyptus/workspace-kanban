@@ -88,6 +88,10 @@ Run the binary directly:
 ./server/target/release/kanban-server
 ```
 
+## Binary Only
+
+The frontend assets (`index.html`, `app.js`, `styles.css`) are embedded into the binary at build time, so you can run just the compiled server without shipping the `web/` folder.
+
 ## Board Configuration (`.workspace-kanban`)
 
 The board structure is defined by a file named `.workspace-kanban` inside the target directory.
@@ -173,6 +177,7 @@ All endpoints use JSON.
 - `PUT /api/board` → update board config
 - `GET /api/ui` → get UI defaults
 - `GET /api/theme` → get theme settings
+- `GET /api/updates?since=<version>` → long-poll updates (server responds when changes occur)
 
 Task schema:
 ```json

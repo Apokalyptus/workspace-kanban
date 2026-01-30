@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Condvar, Mutex};
+use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -15,6 +17,9 @@ const DEFAULT_FOLDERS: [(&str, &str); 4] = [
 ];
 const CONFIG_FILE: &str = ".workspace-kanban";
 const THEME_FILE: &str = ".kanban-theme.conf";
+const INDEX_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/index.html"));
+const APP_JS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/app.js"));
+const STYLES_CSS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/styles.css"));
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Task {
     id: String,
@@ -45,6 +50,12 @@ struct BoardConfig {
 struct ThemeSettings {
     headline: Option<String>,
     colors: HashMap<String, String>,
+}
+
+struct UpdateState {
+    version: AtomicU64,
+    lock: Mutex<()>,
+    cvar: Condvar,
 }
 
 #[derive(Debug, Deserialize)]
@@ -524,6 +535,26 @@ fn browser_marker_path(root: &Path) -> PathBuf {
     root.join(".kanban-browser-opened")
 }
 
+fn notify_update(state: &Arc<UpdateState>) {
+    state.version.fetch_add(1, Ordering::SeqCst);
+    state.cvar.notify_all();
+}
+
+fn parse_since(url: &str) -> u64 {
+    if let Some(query) = url.split('?').nth(1) {
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                if key == "since" {
+                    if let Ok(parsed) = value.parse::<u64>() {
+                        return parsed;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
 fn slugify(input: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -669,14 +700,17 @@ fn load_all_tasks(root: &Path, config: &BoardConfig) -> io::Result<HashMap<Strin
     Ok(out)
 }
 
-fn content_type_for(path: &str) -> &'static str {
-    if path.ends_with(".css") {
-        "text/css"
-    } else if path.ends_with(".js") {
-        "application/javascript"
-    } else {
-        "text/html"
-    }
+fn respond_asset(path: &str) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
+    let (body, content_type) = match path {
+        "/" | "/index.html" => (INDEX_HTML, "text/html"),
+        "/app.js" => (APP_JS, "application/javascript"),
+        "/styles.css" => (STYLES_CSS, "text/css"),
+        _ => return None,
+    };
+    Some(
+        Response::from_string(body)
+            .with_header(Header::from_bytes("Content-Type", content_type).unwrap()),
+    )
 }
 
 fn respond_json(status: StatusCode, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -731,6 +765,11 @@ fn main() -> io::Result<()> {
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
     let url = format!("http://localhost:{}", port);
     println!("Kanban server running on {}", url);
+    let update_state = Arc::new(UpdateState {
+        version: AtomicU64::new(1),
+        lock: Mutex::new(()),
+        cvar: Condvar::new(),
+    });
     if open_browser {
         let marker = browser_marker_path(&root_path);
         let already_opened = open_browser_once && marker.exists();
@@ -743,20 +782,45 @@ fn main() -> io::Result<()> {
         }
     }
 
-    for mut request in server.incoming_requests() {
-        let method = request.method().clone();
-        let url = request.url().to_string();
+    for request in server.incoming_requests() {
+        let root_path = root_path.clone();
+        let update_state = update_state.clone();
+        let ui = ui;
+        std::thread::spawn(move || {
+            let mut request = request;
+            let method = request.method().clone();
+            let url = request.url().to_string();
+            let path_only = url.split('?').next().unwrap_or(url.as_str());
 
-        if url.starts_with("/api/") {
-            let mut body = String::new();
-            let _ = request.as_reader().read_to_string(&mut body);
+            if path_only.starts_with("/api/") {
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
 
-            let response = match (&method, url.as_str()) {
-                (Method::Get, "/api/board") => match refresh_config(&root_path, yes) {
-                    Ok(cfg) => {
-                        let payload = serde_json::json!({ "board": cfg });
-                        respond_json(StatusCode(200), &payload.to_string())
+                let response = match (&method, path_only) {
+                    (Method::Get, "/api/updates") => {
+                        let since = parse_since(&url);
+                        let guard = update_state.lock.lock().unwrap();
+                        let current = update_state.version.load(Ordering::SeqCst);
+                        let mut changed = current > since;
+                        if !changed {
+                            let _ = update_state
+                                .cvar
+                                .wait_timeout(guard, Duration::from_secs(25))
+                                .unwrap();
+                            let latest = update_state.version.load(Ordering::SeqCst);
+                            changed = latest > since;
+                        }
+                        let latest = update_state.version.load(Ordering::SeqCst);
+                        respond_json(
+                            StatusCode(200),
+                            &serde_json::json!({ "version": latest, "changed": changed }).to_string(),
+                        )
                     }
+                    (Method::Get, "/api/board") => match refresh_config(&root_path, yes) {
+                        Ok(cfg) => {
+                            let payload = serde_json::json!({ "board": cfg });
+                            respond_json(StatusCode(200), &payload.to_string())
+                        }
                     Err(msg) => respond_json(
                         StatusCode(500),
                         &serde_json::json!({"error": msg}).to_string(),
@@ -779,6 +843,7 @@ fn main() -> io::Result<()> {
                                     match write_config(&root_path, &new_config) {
                                         Ok(_) => match refresh_config(&root_path, yes) {
                                             Ok(cfg) => {
+                                                notify_update(&update_state);
                                                 let payload = serde_json::json!({ "board": cfg });
                                                 respond_json(StatusCode(200), &payload.to_string())
                                             }
@@ -860,10 +925,12 @@ fn main() -> io::Result<()> {
                                     };
                                     let path = task_path(&root_path, &folder, &id);
                                     match write_task(&path, &task) {
-                                        Ok(_) => respond_json(
+                                        Ok(_) => {
+                                            notify_update(&update_state);
+                                            respond_json(
                                             StatusCode(201),
                                             &serde_json::json!(task).to_string(),
-                                        ),
+                                        )}
                                         Err(err) => respond_json(
                                             StatusCode(500),
                                             &serde_json::json!({ "error": err.to_string() }).to_string(),
@@ -913,6 +980,7 @@ fn main() -> io::Result<()> {
                                                             } else if let Err(err) = write_task(&target_path, &task) {
                                                                 respond_json(StatusCode(500), &serde_json::json!({"error": err.to_string()}).to_string())
                                                             } else {
+                                                                notify_update(&update_state);
                                                                 respond_json(StatusCode(200), &serde_json::json!(task).to_string())
                                                             }
                                                         }
@@ -978,7 +1046,10 @@ fn main() -> io::Result<()> {
                                                             task.updated_at = now_iso();
                                                             let final_path = task_path(&root_path, &folder, &task.id);
                                                             match write_task(&final_path, &task) {
-                                                                Ok(_) => respond_json(StatusCode(200), &serde_json::json!(task).to_string()),
+                                                                Ok(_) => {
+                                                                    notify_update(&update_state);
+                                                                    respond_json(StatusCode(200), &serde_json::json!(task).to_string())
+                                                                }
                                                                 Err(err) => respond_json(StatusCode(500), &serde_json::json!({"error": err.to_string()}).to_string()),
                                                             }
                                                         }
@@ -1004,7 +1075,10 @@ fn main() -> io::Result<()> {
                                         find_task_path(&root_path, id_part, &cfg)
                                     {
                                         match fs::remove_file(&path) {
-                                            Ok(_) => respond_json(StatusCode(204), ""),
+                                            Ok(_) => {
+                                                notify_update(&update_state);
+                                                respond_json(StatusCode(204), "")
+                                            }
                                             Err(err) => respond_json(StatusCode(500), &serde_json::json!({"error": err.to_string()}).to_string()),
                                         }
                                     } else {
@@ -1025,28 +1099,17 @@ fn main() -> io::Result<()> {
                 }
             };
 
-            let _ = request.respond(response);
-            continue;
-        }
-
-        let file_path = if url == "/" { "/index.html" } else { url.as_str() };
-        let local_path = Path::new("web").join(file_path.trim_start_matches('/'));
-        if local_path.exists() && local_path.is_file() {
-            match fs::read(&local_path) {
-                Ok(data) => {
-                    let response = Response::from_data(data)
-                        .with_header(Header::from_bytes("Content-Type", content_type_for(file_path)).unwrap());
-                    let _ = request.respond(response);
-                }
-                Err(err) => {
-                    let response = respond_text(StatusCode(500), &err.to_string());
-                    let _ = request.respond(response);
-                }
+                let _ = request.respond(response);
+                return;
             }
-        } else {
-            let response = respond_text(StatusCode(404), "Not Found");
-            let _ = request.respond(response);
-        }
+
+            if let Some(response) = respond_asset(path_only) {
+                let _ = request.respond(response);
+            } else {
+                let response = respond_text(StatusCode(404), "Not Found");
+                let _ = request.respond(response);
+            }
+        });
     }
 
     Ok(())

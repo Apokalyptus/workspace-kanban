@@ -12,11 +12,11 @@
         <h1 id="headline">Kanban Task Files</h1>
         <p>Tasks are stored as plain .md files in fixed folders.</p>
       </div>
+      <div class="header-actions">
+        <button type="button" id="toggle-task-editor">Hide task editor</button>
+        <button type="button" id="toggle-editor">Show board editor</button>
+      </div>
     </header>
-
-    <div class="task-editor-toggle">
-      <button type="button" id="toggle-task-editor">Hide task editor</button>
-    </div>
 
     <section class="composer" id="task-editor">
       <h2>Create Task</h2>
@@ -50,10 +50,6 @@
       </form>
     </section>
 
-    <div class="board-editor-toggle">
-      <button type="button" id="toggle-editor">Hide editor</button>
-    </div>
-
     <section class="board-editor" id="board-editor">
       <header>
         <div>
@@ -72,6 +68,8 @@
     </section>
 
     <main class="board" id="board"></main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <template id="task-card-template">
       <article class="card" draggable="true">
@@ -109,7 +107,11 @@
           WIP Limit
           <input type="number" name="wip_limit" min="0" placeholder="0" />
         </label>
-        <button type="button" data-action="remove">Remove</button>
+        <div class="row-actions">
+          <button type="button" data-action="move-up">Up</button>
+          <button type="button" data-action="move-down">Down</button>
+          <button type="button" data-action="remove">Remove</button>
+        </div>
       </div>
     </template>
 
