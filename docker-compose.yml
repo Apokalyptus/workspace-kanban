@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  kanban:
+    image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: workspace-kanban
+    command:
+      - kanban-server
+      - --show-task-editor=true
+      - --show-board-editor=false
+    ports:
+      - "8787:8787"
+    environment:
+      KANBAN_ROOT: /data/kanban # create by hand 
+      KANBAN_PORT: 8787
+    volumes:
+      - kanban_data:/data
+    restart: unless-stopped
+
+volumes:
+  kanban_data:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${SMB_HOST}/${SMB_SHARE}"
+      o: "username=${SMB_USER},password=${SMB_PASS},vers=3.0,uid=1000,gid=1000,file_mode=0660,dir_mode=0770"
